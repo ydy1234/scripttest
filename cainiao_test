@@ -1,0 +1,162 @@
+#!/bin/bash
+echo "hello world"
+your_name="ydy1234"
+echo $your_name
+echo ${your_name}
+your_number="1234"
+readonly your_number
+your_number="123"
+unset your_name
+your_name="test program!"
+echo ${#your_name}
+echo ${your_name:1:4}
+your_array=(v0 v1 v2 v3)
+echo ${your_array[@]}
+echo ${#your_array[@]}
+echo ${#your_array[0]}
+
+echo \"It is a test\"
+
+echo \"Plz input your_card Num\"
+read your_card
+echo \"$your_card is your ID\"
+
+echo -e "OK! \n"
+echo "great"
+
+echo -e "OK! \c"
+echo "great"
+
+echo "Test file" >a.log
+
+echo '$your_card'
+echo '$your_card \"'
+
+echo date
+echo 'date'
+echo `date`
+
+num1=2
+num2=3
+if test $num1 -eq $num2
+ then 
+ echo "Num equle"
+ else
+ echo "num not equele"
+fi
+
+result=$[num1+num2]
+echo "result is $result"
+
+
+str1="abcd"
+str2="edf"
+echo "str1:$str1,str2:$str2"
+if test $str1=$str2
+ then 
+ echo "not empty Char Equle"
+ else
+ echo "not empty Char not equele"
+fi
+if test $str1 = $str2
+ then 
+ echo "empty Char Equle"
+ else
+ echo "empty Char not equele"
+fi
+
+if test -e ./test
+then
+    echo '文件已存在!'
+else
+    echo '文件不存在!'
+fi
+
+if test -e ndpi
+then
+    echo '文件已存在!'
+else
+    echo '文件不存在!'
+fi
+
+a=10
+b=20
+if [ $a == $b ]
+then
+   echo "a 等于 b"
+elif [ $a -gt $b ]
+then
+   echo "a 大于 b"
+elif [ $a -lt $b ]
+then
+   echo "a 小于 b"
+else
+   echo "没有符合的条件"
+fi
+
+for loop in 1 2 3 4 5
+do
+    echo "The value is: $loop"
+done
+
+int=1
+while(( $int<=5 ))
+do
+    echo $int
+    let "int++"
+done
+
+
+
+echo '按下 <CTRL-D> 退出'
+echo -n '输入你最喜欢的网站名: '
+while read FILM
+do
+    echo "是的！$FILM 是一个好网站"
+    break
+done
+
+while :
+do
+    echo -n "输入 1 到 5 之间的数字:"
+    read aNum
+    case $aNum in
+        1|2|3|4|5) echo "你输入的数字为 $aNum!"
+        ;;
+        *) echo "你输入的数字不是 1 到 5 之间的! 游戏结束"
+            break
+        ;;
+    esac
+done
+
+demoFun(){
+    echo "这是我的第一个 shell 函数!"
+}
+echo "-----函数开始执行-----"
+demoFun
+echo "-----函数执行完毕-----"
+
+funWithReturn(){
+    echo "这个函数会对输入的两个数字进行相加运算..."
+    echo "输入第一个数字: "
+    read aNum
+    echo "输入第二个数字: "
+    read anotherNum
+    echo "两个数字分别为 $aNum 和 $anotherNum !"
+    return $(($aNum+$anotherNum))
+}
+funWithReturn
+echo "输入的两个数字之和为 $? !"
+echo "PID is $$"
+funWithParam(){
+    echo "第一个参数为 $1 !"
+    echo "第二个参数为 $2 !"
+    echo "第十个参数为 $10 !"
+    echo "第十个参数为 ${10} !"
+    echo "第十一个参数为 ${11} !"
+    echo "参数总数有 $# 个!"
+    echo "作为一个字符串输出所有参数 $* !"
+}
+funWithParam 1 2 3 4 5 6 7 8 9 34 73
+
+

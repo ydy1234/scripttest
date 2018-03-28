@@ -1,0 +1,14 @@
+#! /bin/bash
+# while loops
+n=1
+while (($n<=3))
+do 
+echo $n
+((n++))
+#./usr/share/applications/Terminal &
+gnome-terminal -x bash -c “sh ./run.sh;exec bash;”
+
+
+sleep 1
+done
+
