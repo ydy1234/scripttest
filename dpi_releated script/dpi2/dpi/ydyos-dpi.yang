@@ -1,0 +1,112 @@
+module ydyos-dpi {
+  namespace "urn:ydyos:params:xml:ns:yang:ydyos-dpi";
+  prefix "ydyos-dpi";
+  
+  organization
+    "ydy NETMOD (NETCONF Data Modeling Language) Working Group";
+  
+  description
+    "ydyOS Upgrade operation.
+    
+    Copyright (C) 2017-2030 ydy. All rights reserved.
+    
+    This version of this YANG module is part of RFC 7223; see
+    the RFC itself for full legal notices.";
+    
+  revision 2014-08-06 {
+    description
+      "Initial revision.";
+    reference
+      "RFC 7317: A YANG Data Model for System Management";
+  }
+  
+  container dpi {
+    description "Placeholder.";
+
+    leaf say-hello {
+      description "Say hello.";
+
+      type string;
+    }
+  }
+  rpc on-dpicheck {
+    description 
+      "Download package and report status information.";
+	   
+    input {
+      leaf dpicheck {
+        type boolean;
+      }
+	  leaf nicport {
+        type string;
+      }
+    }
+	
+    output {
+      container data {
+        leaf result {
+          type string;
+        }
+      }
+    }
+  }
+    rpc on-adaption {
+    description 
+      "Download package and report status information.";
+	   
+    input {
+      leaf adaption {
+        type boolean;
+      }
+	  leaf protol {
+        type string;
+      }
+	  leaf nicport {
+        type string;
+      }
+	  leaf lannw {
+        type string;
+      }
+	  leaf nexthop {
+        type string;
+      }
+    }
+	
+    output {
+      container data {
+        leaf result {
+          type string;
+        }
+      }
+    }
+  }
+  rpc set-protocol {
+    description 
+      "Get protocols from web.";
+	   
+    input {
+      leaf protocol {
+        type string;
+      }
+      leaf  checkPort {
+        type string;
+      }
+      leaf lanNW {
+        type string;
+      }
+      leaf nextHop {
+        type string;
+      }
+    }
+	
+    output {
+      container data {
+        leaf result {
+          type string;
+        }
+      }
+    }
+  }
+}
+
+
