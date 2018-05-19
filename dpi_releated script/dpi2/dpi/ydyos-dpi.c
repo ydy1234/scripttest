@@ -13,8 +13,11 @@
 #include "../ydyos-netconf.h"
 #include <arpa/inet.h>
 
-#define NC_ydyOS_SHELL_DPI        "/opt/vyatta/sbin/ydyos-shell-dpion.sh"
-#define NC_ydyOS_SHELL_DPIADAPTION       "/opt/vyatta/sbin/ydyos-shell-dpiAdaption.sh"
+#define NC_ydyos_SHELL_DPI        "/opt/vyatta/sbin/ydyos-shell-dpion.sh"
+#define NC_ydyos_SHELL_DPIADAPTION       "/opt/vyatta/sbin/ydyos-shell-dpiAdaption.sh"
+#define NC_ydyos_RPC_RETURN_REPREAT   "<result>\ndpi module works now and request will process later\n</result>"
+#define NC_ydyos_RPC_RETURN_NORESOURCE   "<result>\nno more resource for request\n</result>"
+
 
 #define __DPI_DEBUG__
 #ifdef __DPI_DEBUG__
@@ -22,13 +25,44 @@
 #else
 #define DPI_DEBUG(format, ...)
 #endif
-//记录已经设置过的协议和端口
-typedef struct _protolPort{
-  char protol[30];
-  char port[10];
-}protolPort;
-int dpiCnt=0;
-protolPort record[20];
+
+#define MAX_TRAFFIC 10
+#define MAX_NICNUM 2
+
+#define NC_NS_ydyos_DPI "urn:ydyos:params:xml:ns:yang:ydyos-dpi"
+
+//DPI支持的协议类型
+int saveProtoCnt=243;
+char* saveProto[]={"Unknown","FTP_CONTROL","POP3","SMTP","IMAP","DNS","IPP","HTTP","MDNS","NTP",
+"NetBIOS","NFS","SSDP","BGP","SNMP","XDMCP","SMB","Syslog","DHCP","PostgreSQL",
+"MySQL","Hotmail","Direct_Download_Link","POPS","AppleJuice","DirectConnect","ntop","COAP","VMware","SMTPS",
+"Filetopia","UBNTAC2","Kontiki","OpenFT","FastTrack","Gnutella","eDonkey","BitTorrent","EPP","AVI",
+"Flash","OggVorbis","MPEG","QuickTime","RealMedia","WindowsMedia","MMS","Xbox","QQ","PlaceholderA",
+"RTSP","IMAPS","IceCast","PPLive","PPStream","Zattoo","ShoutCast","Sopcast","Tvants","TVUplayer",
+"HTTP_Download","QQLive","Thunder","Soulseek","SSL_No_Cert","IRC","Ayiya","Unencrypted_Jabber","MSN","Oscar",
+"Yahoo","BattleField","GooglePlus","VRRP","Steam","HalfLife2","WorldOfWarcraft","Telnet","STUN","IPsec",
+"GRE","ICMP","IGMP","EGP","SCTP","OSPF","IP_in_IP","RTP","RDP","VNC",
+"PcAnywhere","SSL","SSH","Usenet","MGCP","IAX","TFTP","AFP","Stealthnet","Aimini",
+"SIP","TruPhone","ICMPV6","DHCPV6","Armagetron","Crossfire","Dofus","Fiesta","Florensia","Guildwars",
+"HTTP_Application_ActiveSync","Kerberos","LDAP","MapleStory","MsSQL-TDS","PPTP","Warcraft3","WorldOfKungFu","Slack","Facebook",
+"Twitter","Dropbox","GMail","GoogleMaps","YouTube","Skype","Google","DCE_RPC","NetFlow","sFlow",
+"HTTP_Connect","HTTP_Proxy","Citrix","NetFlix","LastFM","Waze","YouTubeUpload","ICQ","CHECKMK","AJP",
+"Apple","Webex","WhatsApp","AppleiCloud","Viber","AppleiTunes","Radius","WindowsUpdate","TeamViewer","Tuenti",
+"LotusNotes","SAP","GTP","UPnP","LLMNR","RemoteScan","Spotify","WebM","H323","OpenVPN",
+"NOE","CiscoVPN","TeamSpeak","Tor","CiscoSkinny","RTCP","RSYNC","Oracle","Corba","UbuntuONE",
+"Whois-DAS","Collectd","SOCKS","Nintendo","RTMP","FTP_DATA","Wikipedia","ZeroMQ","Amazon","eBay",
+"CNN","Megaco","Redis","Pando_Media_Booster","VHUA","Telegram","Vevo","Pandora","QUIC","WhatsAppVoice",
+"EAQ","Ookla","AMQP","KakaoTalk","KakaoTalk_Voice","Twitch","QuickPlay","WeChat","MPEG_TS","Snapchat",
+"Sina(Weibo)","GoogleHangout","IFLIX","Github","BJNP","1kxun","iQIYI","SMPP","DNScrypt","TINC",
+"Deezer","Instagram","Microsoft","Starcraft","Teredo","HotspotShield","HEP","GoogleDrive","OCS","Office365",
+"Cloudflare","MS_OneDrive","MQTT","RX","AppleStore","OpenDNS","Git","DRDA","PlayStore","SOMEIP",
+"FIX","Playstation","Pastebin","LinkedIn","SoundCloud","CSGO","LISP","Diameter","ApplePush","GoogleServices",
+"AmazonVideo","GoogleDocs","WhatsAppFile"};
+
+//common file LANNW
+char commonlannw[30];
+char commonnexthop[30];
+char commonnumpoint=0;
 //打开dpi检测和关闭dpi检测开关
 int dpiflag=0;
 char port[10];
@@ -36,18 +70,147 @@ int ret;
 pthread_t dpiCheck_tid;
 pthread_attr_t dpiCheck_attr;
 
+//记录已经设置过的协议和端口
+typedef struct _protolPort
+{
+    int  dpiAdapCnt;
+    int  dpiAdaFlag;
+    char dpiAdapProtol[30];
+    char dpiAdapPort2[30];
+    char dpiAdapLanNW[30];
+    char dpiAdapNextHop2[30];
+    char dpiAdapNextHop[30];
+    int threadNum;
+}protolPort;
 //打开dpi自适应调整方案
-int dpiAdapCnt=0;
-int dpiAdaFlag=0;
-char dpiAdapProtol[30]={0};
-char dpiAdapPort2[30]={0};
-char dpiAdapLanNW[30]={0};
-char dpiAdapNextHop2[30]={0};
-char dpiAdapNextHop[30]={0};
+int dpiAdpThreadCnt=0;
+int dpiAdpFlag=0;
+protolPort record[MAX_NICNUM][MAX_TRAFFIC];
+pthread_t dpiAdaption_tid[MAX_NICNUM];
+pthread_attr_t dpiAdaption_attr[MAX_NICNUM];
 
-pthread_t dpiAdaption_tid;
-pthread_attr_t dpiAdaption_attr;
-
+void initParams(int nicnum,int trafficnum)
+{
+    //index 参考范围为0~10
+    record[nicnum][trafficnum].dpiAdaFlag=0;
+    record[nicnum][trafficnum].dpiAdapCnt=0;
+    memset(record[nicnum][trafficnum].dpiAdapProtol,0,sizeof(record[nicnum][trafficnum].dpiAdapProtol));
+    memset(record[nicnum][trafficnum].dpiAdapPort2,0,sizeof(record[nicnum][trafficnum].dpiAdapPort2));
+    memset(record[nicnum][trafficnum].dpiAdapLanNW,0,sizeof(record[nicnum][trafficnum].dpiAdapLanNW));
+    memset(record[nicnum][trafficnum].dpiAdapNextHop2,0,sizeof(record[nicnum][trafficnum].dpiAdapNextHop2));
+    memset(record[nicnum][trafficnum].dpiAdapNextHop,0,sizeof(record[nicnum][trafficnum].dpiAdapNextHop));
+    record[nicnum][trafficnum].threadNum=0xff;
+}
+int getNoUseValidThreadNum(int *nicnum,int *trafficnum)
+{
+    int flag=0;
+    int j=0;
+    int i=0;
+    for(i=0;i<MAX_NICNUM;i++)
+    {
+        flag=0;
+	    for(j=0;j<MAX_TRAFFIC;j++)
+	    {
+	        if(strstr(record[i][j].dpiAdapPort2,"eth")==NULL)
+		 	   continue;
+		    else
+		    {
+               flag=1;
+			   break;
+		    }
+	    }
+	    if(flag==0)
+	  	   *nicnum=i;
+	    else
+	  	   continue;
+	  
+	    for(j=0;j<MAX_TRAFFIC;j++)
+	    {
+            if(record[i][j].threadNum==0xff)
+            {
+                *trafficnum=j;
+			    break;
+		    }
+	    }
+   	}
+    return 0xff;
+}
+int getValidThreadNum(int *nicnum,int *trafficnum,char* nicport)
+{
+    int j=0;
+	int i=0;
+	int flag=0;
+	int tflag=0;
+	for(i=0;i<MAX_NICNUM;i++)
+	{
+	    flag=0;
+	    for(j=0;j<MAX_TRAFFIC;j++)
+	    { 
+            if(strcmp(record[i][j].dpiAdapPort2,nicport)==0)
+            {
+                *nicnum=i;
+		        flag=1;
+		        break;
+		    }
+        }
+	    if(flag==1)
+	  	   break;
+    }
+	if(flag==1)
+	{
+        for(j=0;j<MAX_TRAFFIC;j++)
+        {
+            if(record[*nicnum][j].threadNum==0xff)
+            {
+               *trafficnum=j;
+			   break;
+		    }
+	    }
+	}
+	else if(flag==0)
+	{
+        for(i=0;i<MAX_NICNUM;i++)
+	    {
+	        tflag=0;
+	        for(j=0;j<MAX_TRAFFIC;j++)
+	        { 
+	            if(strstr(record[i][j].dpiAdapPort2,"eth")!=NULL)
+	            {
+                    tflag=1;
+			        break;
+		        }
+	        }
+		    if(tflag==0)
+		    {
+                *nicnum=i;
+		        for(j=0;j<MAX_TRAFFIC;j++)
+                {
+                    if(record[*nicnum][j].threadNum==0xff)
+                    {
+                        *trafficnum=j;
+			            break;
+		            }
+	            }
+		        break;
+		    }
+        }
+	}
+    return flag;
+}
+int getValidRule()
+{
+    int i=0;
+	int j=0;
+	for(i=0;i<MAX_NICNUM;i++)
+	{
+	    for(j=0;j<MAX_TRAFFIC;j++)
+	    { 
+            if(record[i][j].threadNum!=0xff)
+	 	       return 1;
+	    }
+    }
+    return 0;
+}
 static int finish(char* msg, int ret, struct nc_err** error) {
 	if (ret != EXIT_SUCCESS && error != NULL) {
 		*error = nc_err_new(NC_ERR_OP_FAILED);
@@ -80,7 +243,7 @@ static char *get_rand_string(int length)
 	return str;
 }
 
-static int exec_cmd(char *cmd, char **result) {
+static int exec_cmd(char *cmd, char **result, int cmd_group) {
     pid_t status;
 	unsigned int file_size = 0;
 	int ret = -1;
@@ -99,7 +262,15 @@ static int exec_cmd(char *cmd, char **result) {
         return -1;
 	}
 	
-	asprintf(&cmd_tmp, "%s > %s", cmd, file_name);
+    if (cmd_group == NC_ydyos_CONFIGURATION_CMD) {
+        asprintf(&cmd_tmp, "sg vyattacfg -c \"%s\" > %s", cmd, file_name);
+    }
+    else if (cmd_group == NC_ydyos_SHOW_CMD) {
+        asprintf(&cmd_tmp, "sg vyattacfg -c \'%s\' %s > %s", cmd, NC_ydyos_SHELL_SHOW_FORMAT_XML, file_name);
+    }
+    else {
+        asprintf(&cmd_tmp, "%s > %s", cmd, file_name);
+    }
     status = system(cmd_tmp);
 	free(cmd_tmp);
 
@@ -188,60 +359,69 @@ static const char* get_node_content(const xmlNodePtr node)
 //判断是否有效IP
 int check_ipaddr (char *str0) 
 {
-   char str[100];
-   strcpy(str,str0);
-   str[strlen(str)-1]='\0';
-   if (str == NULL || *str == '\0')
-       return 1;
-
-   struct sockaddr_in6 addr6; 
-   struct sockaddr_in addr4; 
-
-   if (1 == inet_pton (AF_INET, str, &addr4.sin_addr))
+    char str[100];
+    strcpy(str,str0);
+    str[strlen(str)-1]='\0';
+    if (str == NULL || *str == '\0')
         return 1;
-   else if (1 == inet_pton (AF_INET6, str, &addr6.sin6_addr))
-        return 1;
-   return 0;
-}
 
-static int getRule(char* msg)
-{
-  if(strcmp(msg,"QQ")==0)
-  	return 100;
-  else
-  	return 200;
+    struct sockaddr_in6 addr6; 
+    struct sockaddr_in addr4; 
+
+    if (1 == inet_pton (AF_INET, str, &addr4.sin_addr))
+         return 1;
+    else if (1 == inet_pton (AF_INET6, str, &addr6.sin6_addr))
+         return 1;
+    return 0;
 }
-static int checkDPIProtol(char* msg, char* port)
+int getRule(char* msg,int threadnum)
 {
-  int i=0;
-  int flag=0;
-  DPI_DEBUG("%s : %d : dpiCnt=%d,protol=%s,port=%s",__FUNCTION__,__LINE__,dpiCnt,msg,port);
-  for(i=0;i<dpiCnt;i++)
-  {
-    
-    if(strcmp(msg,record[i].protol)==0&&strcmp(port,record[i].port)==0)
+    int i=0;
+    int tmp=0;
+    for(i=0;i<MAX_TRAFFIC;i++)
     {
-      
-	  DPI_DEBUG("%s : %d protol=%s ,port=%s found",__FUNCTION__,__LINE__,msg,port);
-      flag=1;
-	  break;
-	}
-  }
-  if(flag==1)
-  {
-    return 1;
-  }
-  else
-  {
-    strcpy(record[dpiCnt].protol,msg);
-	strcpy(record[dpiCnt].port,port);
-	
-	DPI_DEBUG("%s : %d record %d [%s ,%s ]",__FUNCTION__,__LINE__,dpiCnt,msg,port);
-	dpiCnt++;
-	return 0;
-  }
-}
+        if(strcmp(msg,record[threadnum][i].dpiAdapProtol)==0)
+        {
+            return (threadnum*MAX_TRAFFIC+i+1+100);
+	    }
+    }
 
+    return 0;
+}
+int checkDPIProtol(char* msg, char* port,int *nicnum,int *trafficnum)
+{
+    int i=0;
+    int j=0;
+    DPI_DEBUG("%s : %d : dpiCnt=%d,protol=%s,port=%s",__FUNCTION__,__LINE__,dpiAdpThreadCnt,msg,port);
+    for(i=0;i<MAX_NICNUM;i++)
+    {
+	    for(j=0;j<MAX_TRAFFIC;j++)
+	    {
+            if(strcmp(msg,record[i][j].dpiAdapProtol)==0&&strcmp(port,record[i][j].dpiAdapPort2)==0)
+            {    
+	            DPI_DEBUG("%s : %d protol=%s ,port=%s found",__FUNCTION__,__LINE__,msg,port);
+		        *nicnum=i;
+		        *trafficnum=j;
+	            return j;
+	        }
+        }
+    }
+    return 0xff;
+}
+int ifHasSet(char* nicport)
+{
+    int i=0;
+	int j=0;
+	for(i=0;i<MAX_NICNUM;i++)
+	{
+	    for(j=0;j<MAX_TRAFFIC;j++)
+	    {
+            if(strcmp(record[i][j].dpiAdapPort2,nicport)==0)
+		  	   return i;
+	    }
+	}
+	return 0xff;
+}
 /* transAPI version which must be compatible with libnetconf */
 int transapi_version = 6;
 
@@ -372,661 +552,635 @@ xmlNodePtr get_rpc_node(const char *name, const xmlNodePtr node) {
 /////////////////////////////////////////////////////////////////
 void *dpi_thread(void *arg)
 {
-  char cmd[150];
-  char cmd_tmp[150];
-  char shell_path[256] = {0};
-  char *msg = NULL;
-  char *shell_result = NULL;
-  int index=0;
+    char cmd[150];
+    char cmd_tmp[150];
+    char shell_path[256] = {0};
+    char *msg = NULL;
+    char *shell_result = NULL;
+    int index=0;
+    int index2=0;
 
-  nc_reply *reply = NULL;
-  struct nc_err *err = NULL;
-  char *cmd2 = NULL;
+    nc_reply *reply = NULL;
+    struct nc_err *err = NULL;
+    char *cmd2 = NULL;
   
-  while(dpiflag)
-  {
-      memset(shell_path,0,sizeof(shell_path));
-	  memset(cmd,0,sizeof(cmd));
-	  memset(cmd_tmp,0,sizeof(cmd_tmp));
-	  sprintf(cmd_tmp, "bash %s ", NC_ydyOS_SHELL_DPI);
-	  strcpy(shell_path, cmd_tmp);
-	  strcpy(cmd, cmd_tmp);
-	  memset(cmd_tmp,0,sizeof(cmd_tmp));
-      sprintf(cmd_tmp," start %s",port);
-      strcat(cmd, cmd_tmp);
-      DPI_DEBUG("cmd = %s", cmd);
-	  if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-	  {
-	     if(shell_result!=NULL)
-	     {
-	       DPI_DEBUG("shell_result failed= %s",shell_result);
-	       free(shell_result);
-		   shell_result=NULL;	 
-	     }
-	  }
-	  else
-	  {
-		  if(shell_result!=NULL)
-		  {
-		    DPI_DEBUG("shell_result ok= %s",shell_result);
-			free(shell_result);
-			shell_result=NULL;
-		  }
-	  }
-
-  }
-  if(dpiflag==0)
-  {
-	  //stop script
-	  memset(shell_path,0,sizeof(shell_path));
-	  memset(cmd_tmp,0,sizeof(cmd_tmp));
-	  sprintf(cmd_tmp, "bash %s ", NC_ydyOS_SHELL_DPI);
-	  strcpy(shell_path, cmd_tmp);
-	  strcpy(cmd, cmd_tmp);
-	  strcat(cmd, "  stop");
-	  DPI_DEBUG("cmd = %s", cmd);
-	  if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-	  {
-		 err = nc_err_new(NC_ERR_OP_FAILED);
-		 nc_err_set(err, NC_ERR_PARAM_MSG, shell_result);
-		 nc_verb_error(shell_result);
-		 free(shell_result);
-		 return nc_reply_error(err);
-	  }
-	  else
-	  {
-		reply = nc_reply_data_ns(shell_result, namespace_mapping[0].prefix);
-		DPI_DEBUG("--->rpc op success,line=%d",__LINE__);
-		DPI_DEBUG("shell_result = %s", shell_result);
-	  }
-	  free(shell_result);
-	  for(index=0;index<dpiCnt;index++)
-	  {
-	    //delete policy
-	    int rule2=getRule(record[index].protol);
-	    //rm old configure
-	    memset(shell_path,0,sizeof(shell_path));
+    while(dpiflag)
+    {
+        memset(shell_path,0,sizeof(shell_path));
 	    memset(cmd,0,sizeof(cmd));
 	    memset(cmd_tmp,0,sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_DELETE);
+	    sprintf(cmd_tmp, "bash %s ", NC_ydyos_SHELL_DPI);
 	    strcpy(shell_path, cmd_tmp);
 	    strcpy(cmd, cmd_tmp);
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "'interfaces ethernet %s policy route %s-ROUTE' ", 
-							  record[index].port,record[index].protol);
-	    strcat(cmd, cmd_tmp);
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "'protocols static table %d' ", rule2);
-	    strcat(cmd, cmd_tmp);
-		strcat(cmd,"\"");
-	    DPI_DEBUG("cmd = %s", cmd);
-		
-		if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-		{
-		   if(shell_result!=NULL)
-		   {
-			 DPI_DEBUG("shell_result failed= %s",shell_result);
-			 free(shell_result);
-			 shell_result=NULL;    
-		   }
-		}
-		else
-		{
-			if(shell_result!=NULL)
-			{
-			  DPI_DEBUG("shell_result ok= %s",shell_result);
-			  free(shell_result);
-			  shell_result=NULL;
-			}
-		}
-		
-		memset(shell_path,0,sizeof(shell_path));
 	    memset(cmd_tmp,0,sizeof(cmd_tmp));
-	    memset(cmd,0,sizeof(cmd));
-	    sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_DELETE);
-	    strcpy(shell_path, cmd_tmp);
-	    strcpy(cmd, cmd_tmp);
-			
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d' ", record[index].protol,rule2);
-	    strcat(cmd, cmd_tmp);
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "'policy route %s-ROUTE' ", record[index].protol);
-	    strcat(cmd, cmd_tmp);
-		strcat(cmd,"\"");
-	    DPI_DEBUG("cmd = %s", cmd);
-		if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-		{
-		   if(shell_result!=NULL)
-		   {
-			 DPI_DEBUG("shell_result failed= %s",shell_result);
-			 free(shell_result);
-			 shell_result=NULL;    
-		   }
-		}
-		else
-		{
-			if(shell_result!=NULL)
-			{
-			  DPI_DEBUG("shell_result ok= %s",shell_result);
-			  free(shell_result);
-			  shell_result=NULL;
-			}
-		}
-
-	    memset(shell_path,0,sizeof(shell_path));
+        sprintf(cmd_tmp," start %s",port);
+        strcat(cmd, cmd_tmp);
+        DPI_DEBUG("cmd = %s", cmd);
+	    if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+	    {
+	        if(shell_result!=NULL)
+	        {
+	            DPI_DEBUG("shell_result failed= %s",shell_result);
+	            free(shell_result);
+		        shell_result=NULL;	 
+	        }
+	    }
+	    else
+	    {
+	        if(shell_result!=NULL)
+	        {
+	            DPI_DEBUG("shell_result ok= %s",shell_result);
+		        free(shell_result);
+		        shell_result=NULL;
+	        }
+	    }
+    }
+    if(dpiflag==0)
+    {
+	    //stop script
+        memset(shell_path,0,sizeof(shell_path));
 	    memset(cmd_tmp,0,sizeof(cmd_tmp));
-	    memset(cmd,0,sizeof(cmd));
-	    sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_DELETE);
+	    sprintf(cmd_tmp, "bash %s ", NC_ydyos_SHELL_DPI);
 	    strcpy(shell_path, cmd_tmp);
 	    strcpy(cmd, cmd_tmp);
-	  
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "'firewall group address-group %s-IP' ", record[index].protol);
-	    strcat(cmd, cmd_tmp);
-		strcat(cmd,"\"");
+	    strcat(cmd, "  stop");
 	    DPI_DEBUG("cmd = %s", cmd);
-		if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-		{
-		   if(shell_result!=NULL)
-		   {
-			 DPI_DEBUG("shell_result failed= %s",shell_result);
-			 free(shell_result);
-			 shell_result=NULL;    
-		   }
-		}
-		else
-		{
-			if(shell_result!=NULL)
-			{
-			  DPI_DEBUG("shell_result ok= %s",shell_result);
-			  free(shell_result);
-			  shell_result=NULL;
-			}
-		}
-     }
-  }
-  return;
+	    if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+	    {
+            err = nc_err_new(NC_ERR_OP_FAILED);
+	        nc_err_set(err, NC_ERR_PARAM_MSG, shell_result);
+	        nc_verb_error(shell_result);
+	        free(shell_result);
+	        return nc_reply_error(err);
+	    }
+	    else
+	    {
+	        reply = nc_reply_data_ns(shell_result, namespace_mapping[0].prefix);
+	        DPI_DEBUG("--->rpc op success,line=%d",__LINE__);
+	        DPI_DEBUG("shell_result = %s", shell_result);
+	    }
+	    free(shell_result);
+    }
+    return;
 }
 /////////////////////////////////////////////////////////////////
 //提取netmask的位数以及需要过滤的netmask和nexthop的位数
 static int getNetmaskNum(const char* msg)
 {
-  if(msg==NULL)
-  	return 0;
-  const char* pos=strstr(msg,"/");
-  int netmask=atoi(pos+1);
-  int numpoint=0;
-  switch(netmask)
-  {
-    case 8:
-		numpoint=1;
-		break;
-	case 16:
-		numpoint=2;
-		break;
-	case 24:
-		numpoint=3;
-		break;
-	default:
-		break;
-  }
-  return numpoint;
+    if(msg==NULL)
+  	    return 0;
+    const char* pos=strstr(msg,"/");
+    int netmask=atoi(pos+1);
+    int numpoint=0;
+    switch(netmask)
+    {
+        case 8:
+		    numpoint=1;
+		    break;
+	    case 16:
+		    numpoint=2;
+		    break;
+	    case 24:
+		    numpoint=3;
+		    break;
+	    default:
+		    break;
+    }
+    return numpoint;
 }
 //将所需的参数拷贝到对应的空间
-static int copyValid(const char* msg, int numpoint ,int param2)
+static int copyValid(const char* msg, int numpoint ,int param2,int threadnum,int trafficnum)
 {
-  int i=0;
-  int len=0;
-  if(param2==1)
-  {
-     const char* tmp=msg;
-	 for(i=0;i<numpoint;i++)
-	 {
-       tmp=strstr(tmp,".");
-	   tmp=tmp+1;
-	 }
-	 len=strlen(msg)-strlen(tmp-1);
-	 strncpy(dpiAdapLanNW,msg,len);
-	 dpiAdapLanNW[len]='\0';
-	 return 1;
-  }
-  else if(param2==2)
-  {
-	  const char* tmp=msg;
-	  for(i=0;i<numpoint;i++)
-	  {
-		tmp=strstr(tmp,".");
-		tmp=tmp+1;
-	  }
-	  len=strlen(msg)-strlen(tmp-1);
-	  strncpy(dpiAdapNextHop,msg,len);
-	  dpiAdapNextHop[len]='\0';
-	  return 2;
-  }
+    int i=0;
+    int len=0;
+    if(param2==1)
+    {
+        const char* tmp=msg;
+	    for(i=0;i<numpoint;i++)
+	    {
+            tmp=strstr(tmp,".");
+	        tmp=tmp+1;
+	    }
+	    len=strlen(msg)-strlen(tmp-1);
+	    strncpy(record[threadnum][trafficnum].dpiAdapLanNW,msg,len);
+	    record[threadnum][trafficnum].dpiAdapLanNW[len]='\0';
+	    return 1;
+    }
+    else if(param2==2)
+    {
+	    const char* tmp=msg;
+	    for(i=0;i<numpoint;i++)
+	    {
+		    tmp=strstr(tmp,".");
+		    tmp=tmp+1;
+	    }
+	    len=strlen(msg)-strlen(tmp-1);
+	    strncpy(record[threadnum][trafficnum].dpiAdapNextHop,msg,len);
+	    record[threadnum][trafficnum].dpiAdapNextHop[len]='\0';
+	    return 2;
+    }
 }
 ////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////
 //需要注意线程启动时间
 void *dpiAdaption_thread(void *arg)
-{
-  char cmd[2048];
-  char cmd_tmp[1024];
-  char shell_path[256] = {0};
-  char *msg = NULL;
-  char *shell_result = NULL;
-  int index=0;
-  //记录文件插入行数
-  int filecnt=0;
-  FILE * fp;
-  //循环中所需变量
-  char fname[50]; 
-  char line[30];	
-  char dest[30];
-  int filesize=0;
+{ 
+    //其他相关变量
+    char cmd[2048];
+    char cmd_tmp[1024];
+    char shell_path[256] = {0};
+    char *msg = NULL;
+    char *shell_result = NULL;
+    int index=0;
+    //记录文件插入行数
+    int filecnt=0;
+    FILE * fp;
+    //循环中所需变量
+    char fname[50]; 
+    char line[30];	
+    char dest[30];
+    int filesize=0;
   
-  nc_reply *reply = NULL;
-  struct nc_err *err = NULL;
-  char *cmd2 = NULL;
-  int rule=0;
-  int addcnt=0;
-  DPI_DEBUG("dpiAdaFlag=%d",dpiAdaFlag);
-  while(dpiAdaFlag)
-  {
-      memset(shell_path,0,sizeof(shell_path));
-	  memset(cmd,0,sizeof(cmd));
-	  memset(cmd_tmp,0,sizeof(cmd_tmp));
-	  sprintf(cmd_tmp, "bash %s ", NC_ydyOS_SHELL_DPIADAPTION);
-	  strcpy(shell_path, cmd_tmp);
-	  strcpy(cmd, cmd_tmp);
-	  memset(cmd_tmp,0,sizeof(cmd_tmp));
-      sprintf(cmd_tmp," %s %s %s %d",dpiAdapProtol,dpiAdapLanNW,dpiAdapNextHop,dpiAdapCnt);
-	  DPI_DEBUG("dpiAdapProtol =%s,cmd_tmp =%s",dpiAdapProtol,cmd_tmp);
-      strcat(cmd, cmd_tmp);
-      DPI_DEBUG("cmd = %s", cmd);
-	  if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-	  {
-	     if(shell_result!=NULL)
-	     {
-	       DPI_DEBUG("shell_result failed= %s",shell_result);
-	       free(shell_result);
-		   shell_result=NULL;	 
-	     }
-	  }
-	  else
-	  {
-		  if(shell_result!=NULL)
-		  {
-		    DPI_DEBUG("shell_result ok= %s",shell_result);
-			free(shell_result);
-			shell_result=NULL;
-		  }
-	  }
-	  
-	  //读取del部分
-      memset(fname,0,sizeof(fname));
-	  sprintf(fname,"/var/log/dpi/adaption/%s_del.txt",dpiAdapProtol);
-	  fp=fopen(fname,"r");
-	  rule=getRule(dpiAdapProtol);
-	  if(fp==NULL)
-	  {
-		  DPI_DEBUG("fp = %s open failed", fname);	   
-	  }
-	  fseek(fp, 0L, SEEK_END);  
-      filesize = ftell(fp); 
-	  printf("filesize=%d\n",filesize);
-	  fseek(fp, 0L, SEEK_SET);
-	  if(filesize>7)
-	  {
-	      memset(shell_path,0,sizeof(shell_path));
-		  memset(cmd,0,sizeof(cmd));
-		  memset(cmd_tmp,0,sizeof(cmd_tmp));
-		  sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_DELETE);
-		  strcpy(shell_path, cmd_tmp);
-		  strcpy(cmd, cmd_tmp);
-		  filecnt=0;
-		  while(fgets(line,100,fp)!=NULL)
-		  {    
-		      DPI_DEBUG("line=%s\n",line);
-			  if(check_ipaddr(line)==0)
-			  {
-                DPI_DEBUG("%s is not valid IP",line);
-				continue;
-			  }
-			  if(strlen(line)>7)
-			  {
-			    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-			    sprintf(cmd_tmp, "'firewall group address-group %s-IP address %s' ", 
-							dpiAdapProtol,line);
-			    strcat(cmd, cmd_tmp);
-				filecnt++;
-				if(filecnt>=20)
-				{
-                 	strcat(cmd,"\"");
-	  					/* execute system commands */
-					DPI_DEBUG("cmd = %s", cmd);
-					if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-					{
-					   if(shell_result!=NULL)
-					   {
-						 DPI_DEBUG("shell_result failed= %s",shell_result);
-						 free(shell_result);
-						 shell_result=NULL;    
-					   }
-					}
-					else
-					{
-						if(shell_result!=NULL)
-						{
-						  DPI_DEBUG("shell_result ok= %s",shell_result);
-						  free(shell_result);
-						  shell_result=NULL;
-						}
-					}
-					memset(shell_path,0,sizeof(shell_path));
-				   	memset(cmd,0,sizeof(cmd));
-					memset(cmd_tmp,0,sizeof(cmd_tmp));
-					sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_DELETE);
-					strcpy(shell_path, cmd_tmp);
-					strcpy(cmd, cmd_tmp);
-					filecnt=0;
-				}
-			  }
-		   }
-			strcat(cmd,"\"");
-	  			/* execute system commands */
-			DPI_DEBUG("cmd = %s", cmd);
-		  if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-		  {
-			 if(shell_result!=NULL)
-			 {
-			   DPI_DEBUG("shell_result failed= %s",shell_result);
-			   free(shell_result);
-			   shell_result=NULL;	 
-			 }
-		  }
-		  else
-		  {
-			  if(shell_result!=NULL)
-			  {
-				DPI_DEBUG("shell_result ok= %s",shell_result);
-				free(shell_result);
-				shell_result=NULL;
-			  }
-		  }
-	  }
-	  fclose(fp);
+    nc_reply *reply = NULL;
+    struct nc_err *err = NULL;
+    char *cmd2 = NULL;
+    int rule=0;
+    int addcnt=0;
+    int i=0;
+    int j=0;
+    while(getValidRule())
+    {
+   	    if(!dpiflag)
+	  	    break;
+        for(i=0;i<MAX_NICNUM;i++)
+        {
+	        for(j=0;j<MAX_TRAFFIC;j++)
+            {
+                if(record[i][j].threadNum==0xff)
+                {
+                    if(record[i][j].dpiAdaFlag==1)
+                    {
+			            record[i][j].dpiAdapCnt=0;
+			            DPI_DEBUG("protol exist=%s",record[i][j].dpiAdapProtol);
+			            rule=getRule(record[i][j].dpiAdapProtol,i);
+			            memset(shell_path,0,sizeof(shell_path));
+			            memset(cmd,0,sizeof(cmd));
+			            memset(cmd_tmp,0,sizeof(cmd_tmp));
+			            //rm old configure
+			            sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_DELETE);
+			            strcpy(shell_path, cmd_tmp);
+			            strcpy(cmd, cmd_tmp);
 		
-		//读取add部分
-
-	   memset(fname,0,sizeof(fname));
-	   sprintf(fname,"/var/log/dpi/adaption/%s_add.txt",dpiAdapProtol);
-	   fp=fopen(fname,"r");
-	   rule=getRule(dpiAdapProtol);
-	   if(fp==NULL)
-	   {
-		  DPI_DEBUG("fp = %s open failed", fname);	   
-	   }
-	   fseek(fp, 0L, SEEK_END);  
-       filesize = ftell(fp); 
-	   printf("filesize=%d\n",filesize);
-	   fseek(fp, 0L, SEEK_SET);
-	   if(filesize>7)
-	   {
-	      memset(shell_path,0,sizeof(shell_path));
-		  memset(cmd,0,sizeof(cmd));
-		  memset(cmd_tmp,0,sizeof(cmd_tmp));
-		  sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_SET);
-		  strcpy(shell_path, cmd_tmp);
-		  strcpy(cmd, cmd_tmp);
-		  filecnt=0;
-		  addcnt=0;
-		  while(fgets(line,100,fp)!=NULL)
-		  {
-			  if(check_ipaddr(line)==0)
-			  {
-                DPI_DEBUG("%s is not valid IP",line);
-				continue;
-			  }
-			  if(strlen(line)>7)
-			  {
-			    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-			    sprintf(cmd_tmp, "'firewall group address-group %s-IP address %s' ", 
-							dpiAdapProtol,line);
-			    strcat(cmd, cmd_tmp);
-				filecnt++;
-				addcnt++;
-				if(filecnt>=20)
-				{
-                 	strcat(cmd,"\"");
-	  					/* execute system commands */
-					DPI_DEBUG("cmd = %s", cmd);
-					if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-					{
-					   if(shell_result!=NULL)
-					   {
-						 DPI_DEBUG("shell_result failed= %s",shell_result);
-						 free(shell_result);
-						 shell_result=NULL;    
-					   }
-					}
-					else
-					{
-						if(shell_result!=NULL)
-						{
-						  DPI_DEBUG("shell_result ok= %s",shell_result);
-						  free(shell_result);
-						  shell_result=NULL;
-						}
-					}
-					memset(shell_path,0,sizeof(shell_path));
-				   	memset(cmd,0,sizeof(cmd));
-					memset(cmd_tmp,0,sizeof(cmd_tmp));
-					sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_SET);
-					strcpy(shell_path, cmd_tmp);
-					strcpy(cmd, cmd_tmp);
-					filecnt=0;
-				}
-			  }
-		  }
-		   strcat(cmd,"\"");
-	  			/* execute system commands */
-			DPI_DEBUG("cmd = %s", cmd);
-		  if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-		  {
-			 if(shell_result!=NULL)
-			 {
-			   DPI_DEBUG("shell_result failed= %s",shell_result);
-			   free(shell_result);
-			   shell_result=NULL;	 
-			 }
-		  }
-		  else
-		  {
-			  if(shell_result!=NULL)
-			  {
-				DPI_DEBUG("shell_result ok= %s",shell_result);
-				free(shell_result);
-				shell_result=NULL;
-			  }
-		  }
+			            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+			            sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d' ", record[i][j].dpiAdapPort2,rule);
+			            //sprintf(cmd_tmp, "'firewall group address-group %s-IP' ", record[i][j].dpiAdapProtol);
+			            strcat(cmd, cmd_tmp);
+			            strcat(cmd,"\"");
+			            DPI_DEBUG("cmd = %s", cmd);
+			            if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+			            {
+			                if(shell_result!=NULL)
+			                {
+				                DPI_DEBUG("shell_result failed= %s",shell_result);
+				                free(shell_result);
+				                shell_result=NULL;    
+			                }
+			            }
+			            else
+			            {
+				            if(shell_result!=NULL)
+				            {
+				                DPI_DEBUG("shell_result ok= %s",shell_result);
+				                free(shell_result);
+				                shell_result=NULL;
+				            }
+			            }
+			            record[i][j].dpiAdaFlag=0;
+		            }
+	  	            continue;
+                }
+                memset(shell_path,0,sizeof(shell_path));
+	            memset(cmd,0,sizeof(cmd));
+	            memset(cmd_tmp,0,sizeof(cmd_tmp));
+	            sprintf(cmd_tmp, "bash %s ", NC_ydyos_SHELL_DPIADAPTION);
+	            strcpy(shell_path, cmd_tmp);
+	            strcpy(cmd, cmd_tmp);
+	            memset(cmd_tmp,0,sizeof(cmd_tmp));
+                sprintf(cmd_tmp," %s %s %s %d",record[i][j].dpiAdapProtol,record[i][j].dpiAdapLanNW,record[i][j].dpiAdapNextHop,record[i][j].dpiAdapCnt);
+	            DPI_DEBUG("dpiAdapProtol =%s,cmd_tmp =%s",record[i][j].dpiAdapProtol,cmd_tmp);
+                strcat(cmd, cmd_tmp);
+                DPI_DEBUG("cmd = %s", cmd);
+	            if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+	            {
+	                if(shell_result!=NULL)
+	                {
+	                    DPI_DEBUG("shell_result failed= %s",shell_result);
+	                    free(shell_result);
+		                shell_result=NULL;	 
+	                }
+	            }
+	            else
+	            {
+		            if(shell_result!=NULL)
+		            {
+		                 DPI_DEBUG("shell_result ok= %s",shell_result);
+			             free(shell_result);
+			             shell_result=NULL;
+		            }
+	            }
+	            if(!dpiflag)
+	  	           break;
+	            //读取del部分
+                memset(fname,0,sizeof(fname));
+	            sprintf(fname,"/var/log/dpi/adaption/%s_del.txt",record[i][j].dpiAdapProtol);
+	            fp=fopen(fname,"r");
+	            rule=getRule(record[i][j].dpiAdapProtol,i);
+	            if(fp==NULL)
+	            {
+		            DPI_DEBUG("fp = %s open failed", fname);	  
+		            continue;
+	            }
+	            fseek(fp, 0L, SEEK_END);  
+                filesize = ftell(fp); 
+	            printf("filesize=%d\n",filesize);
+	            fseek(fp, 0L, SEEK_SET);
+	            if(filesize>7)
+	            {
+	                memset(shell_path,0,sizeof(shell_path));
+		            memset(cmd,0,sizeof(cmd));
+		            memset(cmd_tmp,0,sizeof(cmd_tmp));
+		            sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_DELETE);
+		            strcpy(shell_path, cmd_tmp);
+		            strcpy(cmd, cmd_tmp);
+		            filecnt=0;
+		            while(fgets(line,100,fp)!=NULL)
+		            {    
+		                DPI_DEBUG("line=%s\n",line);
+			            if(check_ipaddr(line)==0)
+			            {
+                            DPI_DEBUG("%s is not valid IP",line);
+				            continue;
+			            }
+			            if(strlen(line)>7)
+			            {
+			                memset(cmd_tmp, 0, sizeof(cmd_tmp));
+			                sprintf(cmd_tmp, "'firewall group address-group %s-IP address %s' ", 
+							       record[i][j].dpiAdapProtol,line);
+			                strcat(cmd, cmd_tmp);
+				            filecnt++;
+				            if(filecnt>=20)
+				            {
+                 	            strcat(cmd,"\"");
+	  					        /* execute system commands */
+					            DPI_DEBUG("cmd = %s", cmd);
+					            if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+					            {
+					                if(shell_result!=NULL)
+					                {
+						                DPI_DEBUG("shell_result failed= %s",shell_result);
+						                free(shell_result);
+						                shell_result=NULL;    
+					                }
+					            }
+					            else
+					            {
+						            if(shell_result!=NULL)
+						            {
+						                DPI_DEBUG("shell_result ok= %s",shell_result);
+						                free(shell_result);
+						                shell_result=NULL;
+						            }
+					            }
+					            memset(shell_path,0,sizeof(shell_path));
+				   	            memset(cmd,0,sizeof(cmd));
+					            memset(cmd_tmp,0,sizeof(cmd_tmp));
+					            sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_DELETE);
+					            strcpy(shell_path, cmd_tmp);
+					            strcpy(cmd, cmd_tmp);
+					            filecnt=0;
+				            }
+			            }
+		            }
+			        strcat(cmd,"\"");
+	  			    /* execute system commands */
+			        DPI_DEBUG("cmd = %s", cmd);
+		            if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+		            {
+			            if(shell_result!=NULL)
+			            { 
+			                DPI_DEBUG("shell_result failed= %s",shell_result);
+			                free(shell_result);
+			                shell_result=NULL;	 
+			            }
+		            }
+		            else
+		            {
+			            if(shell_result!=NULL)
+			            {
+				            DPI_DEBUG("shell_result ok= %s",shell_result);
+				            free(shell_result);
+				            shell_result=NULL;
+			            }
+		            }
+	            }
+	            fclose(fp);
+		
+		        //读取add部分
+                if(!dpiflag)
+	  	           break;
+	            memset(fname,0,sizeof(fname));
+	            sprintf(fname,"/var/log/dpi/adaption/%s_add.txt",record[i][j].dpiAdapProtol);
+	            fp=fopen(fname,"r");
+	            rule=getRule(record[i][j].dpiAdapProtol,i);
+	            if(fp==NULL)
+	            {
+		            DPI_DEBUG("fp = %s open failed", fname);	
+		            continue;
+	            }
+	            fseek(fp, 0L, SEEK_END);  
+                filesize = ftell(fp); 
+	            printf("filesize=%d\n",filesize);
+	            fseek(fp, 0L, SEEK_SET);
+	            if(filesize>7)
+	            {
+	                memset(shell_path,0,sizeof(shell_path));
+		            memset(cmd,0,sizeof(cmd));
+		            memset(cmd_tmp,0,sizeof(cmd_tmp));
+		            sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_SET);
+		            strcpy(shell_path, cmd_tmp);
+		            strcpy(cmd, cmd_tmp);
+		            filecnt=0;
+		            addcnt=0;
+		            while(fgets(line,100,fp)!=NULL)
+		            {
+			            if(check_ipaddr(line)==0)
+			            {
+                            DPI_DEBUG("%s is not valid IP",line);
+				            continue;
+			            }
+			            if(strlen(line)>7)
+			            {
+			                memset(cmd_tmp, 0, sizeof(cmd_tmp));
+			                sprintf(cmd_tmp, "'firewall group address-group %s-IP address %s' ", 
+							    record[i][j].dpiAdapProtol,line);
+			                strcat(cmd, cmd_tmp);
+				            filecnt++;
+				            addcnt++;
+				            if(filecnt>=20)
+				            {
+                 	            strcat(cmd,"\"");
+	  					        /* execute system commands */
+					            DPI_DEBUG("cmd = %s", cmd);
+					            if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+					            {
+					                if(shell_result!=NULL)
+					                {
+						                DPI_DEBUG("shell_result failed= %s",shell_result);
+						                free(shell_result);
+						                shell_result=NULL;    
+					                }
+					            }
+					            else
+					            {
+						            if(shell_result!=NULL)
+						            {
+						                DPI_DEBUG("shell_result ok= %s",shell_result);
+						                free(shell_result);
+						                shell_result=NULL;
+						            }
+					            }
+					            memset(shell_path,0,sizeof(shell_path));
+				   	            memset(cmd,0,sizeof(cmd));
+					            memset(cmd_tmp,0,sizeof(cmd_tmp));
+					            sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_SET);
+					            strcpy(shell_path, cmd_tmp);
+					            strcpy(cmd, cmd_tmp);
+					            filecnt=0;
+				            }
+			            }
+		            }
+		            strcat(cmd,"\"");
+	  			    /* execute system commands */
+			        DPI_DEBUG("cmd = %s", cmd);
+		            if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+		            {
+			            if(shell_result!=NULL)
+			            {
+			                DPI_DEBUG("shell_result failed= %s",shell_result);
+			                free(shell_result);
+			                shell_result=NULL;	 
+			            }
+		            }
+		            else
+		            {
+			            if(shell_result!=NULL)
+			            {
+				            DPI_DEBUG("shell_result ok= %s",shell_result);
+				            free(shell_result);
+				            shell_result=NULL;
+			            }
+		            }
 			
-		  if(dpiAdapCnt==0&&addcnt>=1)
-		  {
-			    //第一次设置，移除旧的配置
-			    memset(shell_path,0,sizeof(shell_path));
-				memset(cmd,0,sizeof(cmd));
-				memset(cmd_tmp,0,sizeof(cmd_tmp));
-				//rm old configure
-				sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_DELETE);
-				strcpy(shell_path, cmd_tmp);
-				strcpy(cmd, cmd_tmp);
-				memset(cmd_tmp, 0, sizeof(cmd_tmp));
-				sprintf(cmd_tmp, "'interfaces ethernet %s policy route %s-ROUTE' ", 
-								dpiAdapPort2,dpiAdapProtol);
-				strcat(cmd, cmd_tmp);
-				memset(cmd_tmp, 0, sizeof(cmd_tmp));
-				sprintf(cmd_tmp, "'protocols static table %d' ", rule);
-				strcat(cmd, cmd_tmp);
+		            if(record[i][j].dpiAdapCnt==0&&addcnt>=1)
+		            {
+			            //第一次设置，移除旧的配置
+			            memset(shell_path,0,sizeof(shell_path));
+				        memset(cmd,0,sizeof(cmd));
+				        memset(cmd_tmp,0,sizeof(cmd_tmp));
+				        //rm old configure
+				        sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_DELETE);
+				        strcpy(shell_path, cmd_tmp);
+				        strcpy(cmd, cmd_tmp);
+				        memset(cmd_tmp, 0, sizeof(cmd_tmp));
+				        sprintf(cmd_tmp, "'interfaces ethernet %s policy route %s-ROUTE' ", 
+								 record[i][j].dpiAdapPort2,record[i][j].dpiAdapPort2);
+				        strcat(cmd, cmd_tmp);
+				        memset(cmd_tmp, 0, sizeof(cmd_tmp));
+				        sprintf(cmd_tmp, "'protocols static table %d' ", rule);
+				        strcat(cmd, cmd_tmp);
 			  
-				memset(cmd_tmp, 0, sizeof(cmd_tmp));
-				sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d' ", dpiAdapProtol,rule);
-				strcat(cmd, cmd_tmp);
-				memset(cmd_tmp, 0, sizeof(cmd_tmp));
-				sprintf(cmd_tmp, "'policy route %s-ROUTE' ", dpiAdapProtol);
-				strcat(cmd, cmd_tmp);
+				        memset(cmd_tmp, 0, sizeof(cmd_tmp));
+				        sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d' ", record[i][j].dpiAdapPort2,rule);
+				        strcat(cmd, cmd_tmp);
+				        memset(cmd_tmp, 0, sizeof(cmd_tmp));
+				        sprintf(cmd_tmp, "'policy route %s-ROUTE' ", record[i][j].dpiAdapPort2);
+				        strcat(cmd, cmd_tmp);
 		
-				strcat(cmd,"\"");
-				DPI_DEBUG("cmd = %s", cmd);
-				if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-				{
-				   if(shell_result!=NULL)
-				   {
-					 DPI_DEBUG("shell_result failed= %s",shell_result);
-					 free(shell_result);
-					 shell_result=NULL;    
-				   }
-				}
-				else
-				{
-					if(shell_result!=NULL)
-					{
-					  DPI_DEBUG("shell_result ok= %s",shell_result);
-					  free(shell_result);
-					  shell_result=NULL;
-					}
-				}
+				        strcat(cmd,"\"");
+				        DPI_DEBUG("cmd = %s", cmd);
+				        if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+				        {
+				            if(shell_result!=NULL)
+				            {
+					            DPI_DEBUG("shell_result failed= %s",shell_result);
+					            free(shell_result);
+					            shell_result=NULL;    
+				            }
+				        }
+				        else
+				        {
+					        if(shell_result!=NULL)
+					        {
+					            DPI_DEBUG("shell_result ok= %s",shell_result);
+					            free(shell_result);
+					            shell_result=NULL;
+					        }
+				        }
 
-			   //设置相关路由
-			   memset(shell_path,0,sizeof(shell_path));
-			   memset(cmd,0,sizeof(cmd));
-			   memset(cmd_tmp,0,sizeof(cmd_tmp));
-			   sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_SET);
-			   strcpy(shell_path, cmd_tmp);
-			   strcpy(cmd, cmd_tmp);
-			   memset(cmd_tmp, 0, sizeof(cmd_tmp));
-			   sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d destination group address-group %s-IP' ", 
-							dpiAdapProtol,rule,dpiAdapProtol);
-			   strcat(cmd, cmd_tmp);
-			   memset(cmd_tmp, 0, sizeof(cmd_tmp));
-			   sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d set table %d' ", 
-								dpiAdapProtol,rule,rule);
-			   strcat(cmd, cmd_tmp);
+			            //设置相关路由
+			            memset(shell_path,0,sizeof(shell_path));
+			            memset(cmd,0,sizeof(cmd));
+			            memset(cmd_tmp,0,sizeof(cmd_tmp));
+			            sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_SET);
+			            strcpy(shell_path, cmd_tmp);
+			            strcpy(cmd, cmd_tmp);
+			            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+			            sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d destination group address-group %s-IP' ", 
+							    record[i][j].dpiAdapPort2,rule,record[i][j].dpiAdapProtol);
+			            strcat(cmd, cmd_tmp);
+			            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+			            sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d set table %d' ", 
+								record[i][j].dpiAdapPort2,rule,rule);
+			            strcat(cmd, cmd_tmp);
 
-			   memset(cmd_tmp, 0, sizeof(cmd_tmp));
-			   sprintf(cmd_tmp, "'protocols static table %d route 0.0.0.0/0 next-hop %s' ", 
-							rule,dpiAdapNextHop2);
-			   strcat(cmd, cmd_tmp);
+			            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+			            sprintf(cmd_tmp, "'protocols static table %d route 0.0.0.0/0 next-hop %s' ", 
+							    rule,record[i][j].dpiAdapNextHop2);
+			            strcat(cmd, cmd_tmp);
 
-			   memset(cmd_tmp, 0, sizeof(cmd_tmp));
-			   sprintf(cmd_tmp, "'interfaces ethernet %s policy route %s-ROUTE' ", 
-							dpiAdapPort2,dpiAdapProtol);
-			   strcat(cmd, cmd_tmp);
-			   strcat(cmd,"\"");
-			   /* execute system commands */
-			   DPI_DEBUG("cmd = %s", cmd);
-			   if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-			   {
-				  if(shell_result!=NULL)
-				  {
-					DPI_DEBUG("shell_result failed= %s",shell_result);
-					free(shell_result);
-					shell_result=NULL;	  
-				  }
-			   }
-			   else
-			   {
-				   if(shell_result!=NULL)
-				   {
-					 DPI_DEBUG("shell_result ok= %s",shell_result);
-					 free(shell_result);
-					 shell_result=NULL;
-				   }
-			   }
-		}
-		if(addcnt>=1)
-		{
-			dpiAdapCnt++;
-		}
-	   }
-		fclose(fp);	
-  }
-  if(dpiAdaFlag==0)
-  {
-        dpiAdapCnt=0;
-	    DPI_DEBUG("protol exist=%s",dpiAdapProtol);
-	    rule=getRule(dpiAdapProtol);
-		memset(shell_path,0,sizeof(shell_path));
-	    memset(cmd,0,sizeof(cmd));
-	    memset(cmd_tmp,0,sizeof(cmd_tmp));
-	    //rm old configure
-        sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_DELETE);
-	    strcpy(shell_path, cmd_tmp);
-	    strcpy(cmd, cmd_tmp);
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "'interfaces ethernet %s policy route %s-ROUTE' ", 
-                        dpiAdapPort2,dpiAdapProtol);
-	    strcat(cmd, cmd_tmp);
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-        sprintf(cmd_tmp, "'protocols static table %d' ", rule);
-        strcat(cmd, cmd_tmp);
-	    strcat(cmd,"\"");
-	    DPI_DEBUG("cmd = %s", cmd);
-	    if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-	    {
-	      err = nc_err_new(NC_ERR_OP_FAILED);
-	      nc_err_set(err, NC_ERR_PARAM_MSG, shell_result);
-	      nc_verb_error(shell_result);
-	      free(shell_result);
-	      return nc_reply_error(err);
-	    }
-	    else
-	    {
-	       reply = nc_reply_data_ns(shell_result, namespace_mapping[0].prefix);
-	       DPI_DEBUG("--->rpc op success,line=%d",__LINE__);
-	       DPI_DEBUG("shell_result = %s", shell_result);
-	    }
-	    /* free memory */
-	    free(shell_result);	
+			            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+			            sprintf(cmd_tmp, "'interfaces ethernet %s policy route %s-ROUTE' ", 
+							    record[i][j].dpiAdapPort2,record[i][j].dpiAdapPort2);
+			            strcat(cmd, cmd_tmp);
+			            strcat(cmd,"\"");
+			            /* execute system commands */
+			            DPI_DEBUG("cmd = %s", cmd);
+			            if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+			            {
+				            if(shell_result!=NULL)
+				            {
+					            DPI_DEBUG("shell_result failed= %s",shell_result);
+					            free(shell_result);
+					            shell_result=NULL;	  
+				            }
+			            }
+			            else
+			            {
+				            if(shell_result!=NULL)
+				            {
+					            DPI_DEBUG("shell_result ok= %s",shell_result);
+					            free(shell_result);
+					            shell_result=NULL;
+				            }
+			            }
+		            }
+		            if(addcnt>=1)
+		            {
+			            record[i][j].dpiAdapCnt++;
+		            }
+	            }
+		        fclose(fp);	
+            }
+	        if(!dpiflag)
+	  	        break;
+        }
+    }
+    if(1)
+    {  
+        for(i=0;i<MAX_NICNUM;i++)
+        {
+	        for(j=0;j<MAX_TRAFFIC;j++)
+            {
+                DPI_DEBUG("nic=%d,traf=%d,pro=%s,port=%s",i,j,record[i][j].dpiAdapProtol,record[i][j].dpiAdapPort2);
+                if(strstr(record[i][j].dpiAdapPort2,"eth")==NULL)
+			        continue;
+		        rule=getRule(record[i][j].dpiAdapProtol,i);
+		        if(rule==0)
+		           continue;
 		
-		memset(shell_path,0,sizeof(shell_path));
-	    memset(cmd,0,sizeof(cmd));
-	    memset(cmd_tmp,0,sizeof(cmd_tmp));
-	    //rm old configure
-        sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyOS_SHELL_DELETE);
-	    strcpy(shell_path, cmd_tmp);
-	    strcpy(cmd, cmd_tmp);
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-        sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d' ", dpiAdapProtol,rule);
-        strcat(cmd, cmd_tmp);
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "'policy route %s-ROUTE' ", dpiAdapProtol);
-	    strcat(cmd, cmd_tmp);
+		        memset(shell_path,0,sizeof(shell_path));
+	            memset(cmd,0,sizeof(cmd));
+	            memset(cmd_tmp,0,sizeof(cmd_tmp));
+	            //rm old configure
+                sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_DELETE);
+	            strcpy(shell_path, cmd_tmp);
+	            strcpy(cmd, cmd_tmp);
+	            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+	            sprintf(cmd_tmp, "'interfaces ethernet %s policy route %s-ROUTE' ", 
+                        record[i][j].dpiAdapPort2,record[i][j].dpiAdapPort2);
+	            strcat(cmd, cmd_tmp);
+	            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+                sprintf(cmd_tmp, "'protocols static table %d' ", rule);
+                strcat(cmd, cmd_tmp);
 		
-	    memset(cmd_tmp, 0, sizeof(cmd_tmp));
-	    sprintf(cmd_tmp, "'firewall group address-group %s-IP' ", dpiAdapProtol);
-	    strcat(cmd, cmd_tmp);
-	    strcat(cmd,"\"");
-	    DPI_DEBUG("cmd = %s", cmd);
-	    if (exec_cmd(cmd, &shell_result) != ydyOS_SHELL_SUCCESS)
-	    {
-	      err = nc_err_new(NC_ERR_OP_FAILED);
-	      nc_err_set(err, NC_ERR_PARAM_MSG, shell_result);
-	      nc_verb_error(shell_result);
-	      free(shell_result);
-	      return nc_reply_error(err);
-	    }
-	    else
-	    {
-	       reply = nc_reply_data_ns(shell_result, namespace_mapping[0].prefix);
-	       DPI_DEBUG("--->rpc op success,line=%d",__LINE__);
-	       DPI_DEBUG("shell_result = %s", shell_result);
-	    }
-	  /* free memory */
-	   free(shell_result);
-  }
-  return;
+		        memset(cmd_tmp, 0, sizeof(cmd_tmp));
+		        sprintf(cmd_tmp, "'firewall group address-group %s-IP' ", 
+						record[i][j].dpiAdapProtol);
+		        strcat(cmd, cmd_tmp);
+		
+	            strcat(cmd,"\"");
+	            DPI_DEBUG("cmd = %s", cmd);
+		        if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+		        {
+		            if(shell_result!=NULL)
+		            {
+			            DPI_DEBUG("shell_result failed= %s",shell_result);
+			            free(shell_result);
+			            shell_result=NULL;    
+		            }
+		        }
+		        else
+		        {
+			        if(shell_result!=NULL)
+			        {
+			            DPI_DEBUG("shell_result ok= %s",shell_result);
+			            free(shell_result);
+			            shell_result=NULL;
+			        }
+		        }
+
+		
+		        memset(shell_path,0,sizeof(shell_path));
+	            memset(cmd,0,sizeof(cmd));
+	            memset(cmd_tmp,0,sizeof(cmd_tmp));
+	            //rm old configure
+                sprintf(cmd_tmp, "sg vyattacfg -c \"bash %s ", NC_ydyos_SHELL_DELETE);
+	            strcpy(shell_path, cmd_tmp);
+	            strcpy(cmd, cmd_tmp);
+	            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+                sprintf(cmd_tmp, "'policy route %s-ROUTE rule %d' ", record[i][j].dpiAdapPort2,rule);
+                strcat(cmd, cmd_tmp);
+	            memset(cmd_tmp, 0, sizeof(cmd_tmp));
+	            sprintf(cmd_tmp, "'policy route %s-ROUTE' ", record[i][j].dpiAdapPort2);
+	            strcat(cmd, cmd_tmp);
+	
+	            strcat(cmd,"\"");
+	            DPI_DEBUG("cmd = %s", cmd);
+		        if (exec_cmd(cmd, &shell_result, NC_LINUX_CMD) != ydyos_SHELL_SUCCESS)
+		        {
+		            if(shell_result!=NULL)
+		            {
+			            DPI_DEBUG("shell_result failed= %s",shell_result);
+			            free(shell_result);
+			            shell_result=NULL;    
+		            }
+		        }
+		        else
+		        {
+			        if(shell_result!=NULL)
+			        {
+			            DPI_DEBUG("shell_result ok= %s",shell_result);
+			            free(shell_result);
+			            shell_result=NULL;
+			        }
+		        }
+		        initParams(i,j);
+            }
+        }
+    }
+    dpiAdpFlag=0;
+    return;
 }
 
 ////////////////////////////////////////////////////////////////
@@ -1042,79 +1196,82 @@ nc_reply *rpc_on_dpicheck(xmlNodePtr input) {
     const char* dpiValue = NULL;
 	const char* dpiPort = NULL;
 	int ret;
+	int i,j;
 	xmlNodePtr ret2 = NULL;
     nc_reply *reply = NULL;
 	struct nc_err *err = NULL;
     for (ret2 = input; ret2 != NULL; ret2 = ret2->next)
 	{
-      if (xmlStrcmp(ret2->name, BAD_CAST "dpicheck") == 0)
-	  {
-		dpiValue = get_node_content(ret2);
-		DPI_DEBUG("dpiValue = %s", dpiValue);
-  	  }
-	  else if (xmlStrcmp(ret2->name, BAD_CAST "nicport") == 0)
-	  {
-		dpiPort = get_node_content(ret2);
-		DPI_DEBUG("dpiPort = %s", dpiPort);
-		strcpy(port,dpiPort);
-  	  }
+        if (xmlStrcmp(ret2->name, BAD_CAST "dpicheck") == 0)
+	    {
+		    dpiValue = get_node_content(ret2);
+		    DPI_DEBUG("dpiValue = %s", dpiValue);
+  	    }
+	    else if (xmlStrcmp(ret2->name, BAD_CAST "nicport") == 0)
+	    {
+		    dpiPort = get_node_content(ret2);
+		    DPI_DEBUG("dpiPort = %s", dpiPort);
+		    strcpy(port,dpiPort);
+  	    }
     }
 	if(dpiValue!=NULL&&(strcmp(dpiValue,"true")==0))
 	{
-	  //创建线程并开启脚本检测
-      dpiflag=1;
-	  ret = pthread_attr_init(&dpiCheck_attr);
-      if (ret != 0) 
-	  {
-        DPI_DEBUG("pthread_attr_init failed.");
-        err = nc_err_new(NC_ERR_OP_FAILED);
-        nc_err_set(err, NC_ERR_PARAM_MSG, "pthread_attr_init failed.");
-        nc_verb_error("pthread_attr_init failed.");
-						
-        return nc_reply_error(err);
-      } 
+	    if(dpiflag==1)
+	    {
+            return nc_reply_data_ns(NC_ydyos_RPC_RETURN_REPREAT, NC_NS_ydyos_DPI);
+	    }
+	    //创建线程并开启脚本检测
+        dpiflag=1;
+	    ret = pthread_attr_init(&dpiCheck_attr);
+        if (ret != 0) 
+	    {
+            DPI_DEBUG("pthread_attr_init failed.");
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_FAILED, NC_NS_ydyos_DPI);
 
-      ret = pthread_attr_setdetachstate(&dpiCheck_attr, PTHREAD_CREATE_DETACHED);
-      if (ret != 0) 
-	  {
-        DPI_DEBUG("pthread_attr_setdetachstate failed.");
-        err = nc_err_new(NC_ERR_OP_FAILED);
-        nc_err_set(err, NC_ERR_PARAM_MSG, "pthread_attr_setdetachstate failed.");
-        nc_verb_error("pthread_attr_setdetachstate failed.");
-						
-        return nc_reply_error(err);
-      } 
+        } 
 
-      ret = pthread_create(&dpiCheck_tid, &dpiCheck_attr, dpi_thread, NULL);
-      if (ret != 0) 
-	  {
-        DPI_DEBUG("pthread_create failed.");
-        err = nc_err_new(NC_ERR_OP_FAILED);
-        nc_err_set(err, NC_ERR_PARAM_MSG, "pthread_create failed.");
-        nc_verb_error("pthread_create failed.");
-						
-        return nc_reply_error(err);
-      } 
+        ret = pthread_attr_setdetachstate(&dpiCheck_attr, PTHREAD_CREATE_DETACHED);
+        if (ret != 0) 
+	    {
+            DPI_DEBUG("pthread_attr_setdetachstate failed.");
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_FAILED, NC_NS_ydyos_DPI);
+        } 
 
-      ret = pthread_attr_destroy(&dpiCheck_attr);
-      if (ret != 0) 
-	  {
-        DPI_DEBUG("pthread_attr_destroy failed.");
-        err = nc_err_new(NC_ERR_OP_FAILED);
-        nc_err_set(err, NC_ERR_PARAM_MSG, "pthread_attr_destroy failed.");
-        nc_verb_error("pthread_attr_destroy failed.");
-						
-        return nc_reply_error(err);
-      } 
-      reply = nc_reply_data_ns("open dpi ok", namespace_mapping[0].prefix);
-      return reply;
+        ret = pthread_create(&dpiCheck_tid, &dpiCheck_attr, dpi_thread, NULL);
+        if (ret != 0) 
+	    {
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_FAILED, NC_NS_ydyos_DPI);
+        } 
+
+        ret = pthread_attr_destroy(&dpiCheck_attr);
+        if (ret != 0) 
+	    {
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_FAILED, NC_NS_ydyos_DPI);
+        } 
+	    for(i=0;i<MAX_NICNUM;i++)
+	    {
+		    for(j=0;j<MAX_TRAFFIC;j++)
+		    {
+		        initParams(i,j);
+		    }
+	    }
+		return nc_reply_data_ns(NC_ydyos_RPC_RETURN_SUCCESS, NC_NS_ydyos_DPI);
 	}
 	else if(dpiValue!=NULL&&(strcmp(dpiValue,"true")!=0))
 	{
-      //关闭线程并关闭脚本检测及相关路由策略
-      dpiflag=0;
-	  reply = nc_reply_data_ns("close dpi ok", namespace_mapping[0].prefix);
-      return reply;
+         //关闭线程并关闭脚本检测及相关路由策略
+         dpiflag=0;
+	     if(dpiAdpFlag==0)
+	     {
+	         for(i=0;i<MAX_NICNUM;i++)
+             {
+	             for(j=0;j<MAX_TRAFFIC;j++)
+                 {
+                     initParams(i,j);
+	             }
+	         }
+	     }
+		 return nc_reply_data_ns(NC_ydyos_RPC_RETURN_SUCCESS, NC_NS_ydyos_DPI);
 	}
 	else
 	{
@@ -1133,108 +1290,123 @@ nc_reply *rpc_on_adaption(xmlNodePtr input) {
 	xmlNodePtr ret2 = NULL;
     nc_reply *reply = NULL;
 	struct nc_err *err = NULL;
+	int threadnum;
+	int trafficnum;
+	int setflag=0;
     for (ret2 = input; ret2 != NULL; ret2 = ret2->next)
 	{
-      if (xmlStrcmp(ret2->name, BAD_CAST "adaption") == 0)
-	  {
-		dpiAdapValue = get_node_content(ret2);
-		DPI_DEBUG("dpiValue = %s", dpiAdapValue);
-  	  }
-	  else if (xmlStrcmp(ret2->name, BAD_CAST "protol") == 0)
-	  {
-		dpiAdapProtocl = get_node_content(ret2);
-		DPI_DEBUG("dpiAdapProtocl = %s", dpiAdapProtocl);
-		strcpy(dpiAdapProtol,dpiAdapProtocl);
-		DPI_DEBUG("restore pro=%s ",dpiAdapProtol);
-  	  }
-	  else if (xmlStrcmp(ret2->name, BAD_CAST "nicport") == 0)
-	  {
-		dpiAdapPort = get_node_content(ret2);
-		DPI_DEBUG("dpiAdapPort = %s", dpiAdapPort);
-		strcpy(dpiAdapPort2,dpiAdapPort);
-		DPI_DEBUG("restore pro=%s ",dpiAdapPort);
-  	  }
-	  else if (xmlStrcmp(ret2->name, BAD_CAST "lannw") == 0)
-	  {
-		dpiAdaLanNW = get_node_content(ret2);
-		DPI_DEBUG("dpiAdaLanNW = %s", dpiAdaLanNW);
-		int numpoint=getNetmaskNum(dpiAdaLanNW);
-		copyValid(dpiAdaLanNW, numpoint, 1);
-  	  }
-	  else if (xmlStrcmp(ret2->name, BAD_CAST "nexthop") == 0)
-	  {
-		dpiAdaNextHop = get_node_content(ret2);
-		DPI_DEBUG("dpiAdaNextHop = %s", dpiAdaNextHop);
-		int numpoint=getNetmaskNum(dpiAdaLanNW);
-		strcpy(dpiAdapNextHop2,dpiAdaNextHop);
-		copyValid(dpiAdaLanNW, numpoint, 2);
-  	  }
+        if (xmlStrcmp(ret2->name, BAD_CAST "adaption") == 0)
+	    {
+		    dpiAdapValue = get_node_content(ret2);
+		    DPI_DEBUG("dpiValue = %s", dpiAdapValue);
+  	    }
+	    else if (xmlStrcmp(ret2->name, BAD_CAST "protol") == 0)
+	    {
+		    dpiAdapProtocl = get_node_content(ret2);
+		    DPI_DEBUG("dpiAdapProtocl = %s", dpiAdapProtocl);
+  	    }
+	    else if (xmlStrcmp(ret2->name, BAD_CAST "nicport") == 0)
+	    {
+		    dpiAdapPort = get_node_content(ret2);
+		    DPI_DEBUG("dpiAdapPort = %s", dpiAdapPort);
+  	    }
+	    else if (xmlStrcmp(ret2->name, BAD_CAST "lannw") == 0)
+	    {
+		    dpiAdaLanNW = get_node_content(ret2);
+		    DPI_DEBUG("dpiAdaLanNW = %s", dpiAdaLanNW);
+  	    }
+	    else if (xmlStrcmp(ret2->name, BAD_CAST "nexthop") == 0)
+	    {
+		    dpiAdaNextHop = get_node_content(ret2);
+		    DPI_DEBUG("dpiAdaNextHop = %s", dpiAdaNextHop);
+  	    }
     }
 	if(dpiAdapValue!=NULL&&(strcmp(dpiAdapValue,"true")==0))
 	{
-	  DPI_DEBUG("dpiAdpP=%s ",dpiAdapProtol);
-	  if(dpiAdapProtol==1)
-	  {
-          reply = nc_reply_data_ns("Has Set ok Before", namespace_mapping[0].prefix);
-          return reply;
-	  }
-	  //创建线程并开启脚本检测
-      dpiAdaFlag=1;
-	  ret = pthread_attr_init(&dpiAdaption_tid);
-      if (ret != 0) 
-	  {
-        DPI_DEBUG("pthread_attr_init failed.");
-        err = nc_err_new(NC_ERR_OP_FAILED);
-        nc_err_set(err, NC_ERR_PARAM_MSG, "pthread_attr_init failed.");
-        nc_verb_error("pthread_attr_init failed.");
-						
-        return nc_reply_error(err);
-      } 
+	    if(checkDPIProtol(dpiAdapProtocl,dpiAdapPort,&threadnum,&trafficnum)!=0xff)
+	    {
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_REPREAT, NC_NS_ydyos_DPI);
+	    }
+	    else
+	    {
+	        threadnum=0xff,trafficnum=0xff;
+            setflag=getValidThreadNum(&threadnum,&trafficnum,dpiAdapPort);
+		    if(threadnum==0xff||trafficnum==0xff)
+		    {
+				return nc_reply_data_ns(NC_ydyos_RPC_RETURN_NORESOURCE, NC_NS_ydyos_DPI);
+		    }
+		    else
+		    {
+                initParams(threadnum,trafficnum);
+		        int numpoint=getNetmaskNum(dpiAdaLanNW);
+                record[threadnum][trafficnum].dpiAdaFlag=1;
+		        record[threadnum][trafficnum].dpiAdapCnt=0;
+		        record[threadnum][trafficnum].threadNum=threadnum;
+		        strcpy(record[threadnum][trafficnum].dpiAdapProtol,dpiAdapProtocl);
+		        strcpy(record[threadnum][trafficnum].dpiAdapPort2,dpiAdapPort);
+		        strcpy(record[threadnum][trafficnum].dpiAdapNextHop2,dpiAdaNextHop);
+			    if(dpiAdpFlag==1)
+			    {
+		            copyValid(commonlannw, commonnumpoint, 1,threadnum,trafficnum);
+		            copyValid(commonnexthop, commonnumpoint, 2,threadnum,trafficnum);
+			    }
+			    else
+			    {
+                    copyValid(dpiAdaLanNW, numpoint, 1,threadnum,trafficnum);
+		            copyValid(dpiAdaNextHop, numpoint, 2,threadnum,trafficnum);
+			    }
+			    if(dpiAdpFlag==1)
+			    {
+					return nc_reply_data_ns(NC_ydyos_RPC_RETURN_REPREAT, NC_NS_ydyos_DPI);
+			    }
+			    commonnumpoint=numpoint;
+			    strcpy(commonlannw,dpiAdaLanNW);
+			    strcpy(commonnexthop,dpiAdaNextHop);
+			    dpiAdpFlag=1;
+		    }
+		}
+	     //创建线程并开启脚本检测
+	    ret = pthread_attr_init(&dpiAdaption_tid[dpiAdpThreadCnt]);
+        if (ret != 0) 
+	    {
+            DPI_DEBUG("pthread_attr_init failed.");
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_FAILED, NC_NS_ydyos_DPI);
+        } 
 	  
-	  DPI_DEBUG("dpiAdpP=%s ",dpiAdapProtol);
-      ret = pthread_attr_setdetachstate(&dpiAdaption_attr, PTHREAD_CREATE_DETACHED);
-      if (ret != 0) 
-	  {
-        DPI_DEBUG("pthread_attr_setdetachstate failed.");
-        err = nc_err_new(NC_ERR_OP_FAILED);
-        nc_err_set(err, NC_ERR_PARAM_MSG, "pthread_attr_setdetachstate failed.");
-        nc_verb_error("pthread_attr_setdetachstate failed.");
-						
-        return nc_reply_error(err);
-      } 
-	  DPI_DEBUG("dpiAdpP=%s ",dpiAdapProtol);
-      ret = pthread_create(&dpiAdaption_tid, &dpiAdaption_attr, dpiAdaption_thread, NULL);
-      if (ret != 0) 
-	  {
-        DPI_DEBUG("pthread_create failed.");
-        err = nc_err_new(NC_ERR_OP_FAILED);
-        nc_err_set(err, NC_ERR_PARAM_MSG, "pthread_create failed.");
-        nc_verb_error("pthread_create failed.");
-						
-        return nc_reply_error(err);
-      } 
-	  DPI_DEBUG("dpiAdpP=%s ",dpiAdapProtol);
+	    DPI_DEBUG("dpiAdpP=%s ",record[threadnum][trafficnum].dpiAdapProtol);
+        ret = pthread_attr_setdetachstate(&dpiAdaption_attr[dpiAdpThreadCnt], PTHREAD_CREATE_DETACHED);
+        if (ret != 0) 
+	    {
+            DPI_DEBUG("pthread_attr_setdetachstate failed.");
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_FAILED, NC_NS_ydyos_DPI);
+        } 
+	    DPI_DEBUG("dpiAdpP=%s ",record[threadnum][trafficnum].dpiAdapProtol);
+        ret = pthread_create(&dpiAdaption_tid[dpiAdpThreadCnt], &dpiAdaption_attr[dpiAdpThreadCnt], dpiAdaption_thread,NULL);
+        if (ret != 0) 
+	    {
+            DPI_DEBUG("pthread_create failed.");
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_FAILED, NC_NS_ydyos_DPI);
+        } 
+	    DPI_DEBUG("dpiAdpP=%s ",record[threadnum][trafficnum].dpiAdapProtol);
 
-      ret = pthread_attr_destroy(&dpiAdaption_attr);
-      if (ret != 0) 
-	  {
-        DPI_DEBUG("pthread_attr_destroy failed.");
-        err = nc_err_new(NC_ERR_OP_FAILED);
-        nc_err_set(err, NC_ERR_PARAM_MSG, "pthread_attr_destroy failed.");
-        nc_verb_error("pthread_attr_destroy failed.");
-						
-        return nc_reply_error(err);
-      } 
-      reply = nc_reply_data_ns("open dpi-pbr ok", namespace_mapping[0].prefix);
-      return reply;
+        ret = pthread_attr_destroy(&dpiAdaption_attr[dpiAdpThreadCnt]);
+        if (ret != 0) 
+	    {
+            DPI_DEBUG("pthread_attr_destroy failed.");
+			return nc_reply_data_ns(NC_ydyos_RPC_RETURN_FAILED, NC_NS_ydyos_DPI);
+        } 
+		return nc_reply_data_ns(NC_ydyos_RPC_RETURN_SUCCESS, NC_NS_ydyos_DPI);
 	}
 	else if(dpiAdapValue!=NULL&&(strcmp(dpiAdapValue,"true")!=0))
 	{
-      //关闭线程并关闭脚本检测及相关路由策略
-      dpiAdaFlag=0;
-	  dpiAdapCnt=0;
-	  reply = nc_reply_data_ns("close dpi-pbr ok", namespace_mapping[0].prefix);
-      return reply;
+        //关闭线程并关闭脚本检测及相关路由策略
+        threadnum=0xff,trafficnum=0xff;
+        checkDPIProtol(dpiAdapProtocl,dpiAdapPort,&threadnum,&trafficnum);
+	    if(threadnum!=0xff&&trafficnum!=0xff)
+	    {
+	        record[threadnum][trafficnum].threadNum=0xff;
+	    }
+		return nc_reply_data_ns(NC_ydyos_RPC_RETURN_SUCCESS, NC_NS_ydyos_DPI);
 	}
 	else
 	{
